@@ -1,136 +1,342 @@
 import os
 import random
 import math
+import csv
 from PIL import Image, ImageDraw, ImageFont
+from typing import Tuple, List, Set
 
-def get_random_time():
-    """Generates a random time (H, M, S)."""
-    h = random.randint(0, 11) # 0-11 for analog visual logic, can map to 24h later if needed
-    m = random.randint(0, 59)
-    s = random.randint(0, 59)
-    return h, m, s
+# ===================== CONSTANTS & CONFIG =====================
 
-def draw_digital_clock(h, m, s, size=(256, 256)):
-    """Draws a digital clock image."""
-    # Create black background
+ROMAN_NUMERALS = ["XII", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI"]
+ARABIC_NUMERALS = ["12", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]
+
+COLOR_PALETTES = {
+    'classic_white': {'bg': (245, 245, 245), 'face': (255, 255, 255), 'hands': (30, 30, 30), 'accent': (200, 50, 50), 'markers': (50, 50, 50)},
+    'dark_modern':   {'bg': (25, 25, 30), 'face': (45, 45, 50), 'hands': (240, 240, 240), 'accent': (80, 200, 255), 'markers': (200, 200, 200)},
+    'vintage_cream': {'bg': (210, 190, 170), 'face': (250, 240, 220), 'hands': (80, 60, 40), 'accent': (150, 80, 50), 'markers': (100, 80, 60)},
+    'minimal_gray':  {'bg': (240, 240, 245), 'face': (255, 255, 255), 'hands': (60, 60, 60), 'accent': (220, 60, 60), 'markers': (180, 180, 180)},
+    'blue_ocean':    {'bg': (30, 50, 80), 'face': (50, 80, 120), 'hands': (220, 230, 250), 'accent': (100, 200, 255), 'markers': (150, 180, 220)},
+    'orange_warm':   {'bg': (255, 200, 150), 'face': (255, 145, 70), 'hands': (100, 50, 10), 'accent': (255, 100, 20), 'markers': (150, 80, 30)},
+    'green_nature':  {'bg': (200, 220, 200), 'face': (240, 250, 240), 'hands': (40, 80, 40), 'accent': (80, 150, 80), 'markers': (100, 150, 100)},
+    'purple_elegant':{'bg': (230, 220, 240), 'face': (250, 245, 255), 'hands': (80, 60, 100), 'accent': (150, 100, 180), 'markers': (120, 100, 140)},
+    'black_white':   {'bg': (0, 0, 0), 'face': (30, 30, 30), 'hands': (255, 255, 255), 'accent': (255, 50, 50), 'markers': (200, 200, 200)},
+    'gold_luxury':   {'bg': (50, 40, 30), 'face': (240, 230, 210), 'hands': (150, 120, 60), 'accent': (200, 170, 80), 'markers': (180, 150, 80)}
+}
+
+# ===================== HELPER FUNCTIONS =====================
+
+def get_font(size_px, font_name="arial.ttf"):
+    try:
+        return ImageFont.truetype(font_name, size=int(size_px))
+    except IOError:
+        return ImageFont.load_default()
+
+def rotate_point(point, center, angle_rad):
+    """Rotates a point (x, y) around center (cx, cy) by angle_rad."""
+    x, y = point
+    cx, cy = center
+    new_x = cx + (x - cx) * math.cos(angle_rad) - (y - cy) * math.sin(angle_rad)
+    new_y = cy + (x - cx) * math.sin(angle_rad) + (y - cy) * math.cos(angle_rad)
+    return new_x, new_y
+
+def draw_hand_fancy(draw, center, angle_rad, length, width, color, style='line'):
+    """
+    Draws clock hands in various shapes:
+    - 'line': Standard rectangle (classic)
+    - 'tapered': Triangle getting thinner at the end
+    - 'arrow': Classic arrow shape
+    - 'diamond': Diamond shape
+    """
+    cx, cy = center
+    
+    # Calculate the tip position
+    tip_x = cx + length * math.cos(angle_rad)
+    tip_y = cy + length * math.sin(angle_rad)
+
+    if style == 'line':
+        draw.line((cx, cy, tip_x, tip_y), fill=color, width=int(width))
+        
+    elif style == 'tapered':
+        # Base of the triangle (perpendicular to angle)
+        base_w = width * 1.5
+        angle_perp = angle_rad + math.pi / 2
+        
+        # Calculate base points slightly "behind" center so it covers the pivot
+        back_offset = width
+        base_cx = cx - back_offset * math.cos(angle_rad)
+        base_cy = cy - back_offset * math.sin(angle_rad)
+        
+        p1 = (base_cx + base_w * math.cos(angle_perp), base_cy + base_w * math.sin(angle_perp))
+        p2 = (base_cx - base_w * math.cos(angle_perp), base_cy - base_w * math.sin(angle_perp))
+        
+        draw.polygon([p1, p2, (tip_x, tip_y)], fill=color)
+
+    elif style == 'arrow':
+        # Shaft + Head
+        shaft_len = length * 0.7
+        shaft_w = width
+        head_w = width * 2.5
+        
+        # Shaft end point
+        s_end_x = cx + shaft_len * math.cos(angle_rad)
+        s_end_y = cy + shaft_len * math.sin(angle_rad)
+        
+        # Draw Shaft
+        draw.line((cx, cy, s_end_x, s_end_y), fill=color, width=int(shaft_w))
+        
+        # Draw Arrow Head
+        angle_perp = angle_rad + math.pi / 2
+        p1 = (s_end_x + head_w/2 * math.cos(angle_perp), s_end_y + head_w/2 * math.sin(angle_perp))
+        p2 = (s_end_x - head_w/2 * math.cos(angle_perp), s_end_y - head_w/2 * math.sin(angle_perp))
+        draw.polygon([p1, p2, (tip_x, tip_y)], fill=color)
+
+    elif style == 'diamond':
+        # Kite/Diamond shape
+        mid_len = length * 0.3
+        max_w = width * 2
+        angle_perp = angle_rad + math.pi / 2
+        
+        # Widest point
+        mid_x = cx + mid_len * math.cos(angle_rad)
+        mid_y = cy + mid_len * math.sin(angle_rad)
+        
+        p_left = (mid_x + max_w * math.cos(angle_perp), mid_y + max_w * math.sin(angle_perp))
+        p_right = (mid_x - max_w * math.cos(angle_perp), mid_y - max_w * math.sin(angle_perp))
+        
+        # Back tail
+        tail_len = length * 0.15
+        tail_x = cx - tail_len * math.cos(angle_rad)
+        tail_y = cy - tail_len * math.sin(angle_rad)
+        
+        draw.polygon([(tail_x, tail_y), p_left, (tip_x, tip_y), p_right], fill=color)
+
+def draw_markers(draw, center, radius, style, color, size, font=None):
+    """Draws face markers: lines, dots, arabic numbers, or roman numerals"""
+    cx, cy = center
+    
+    for i in range(12):
+        angle = math.radians(i * 30 - 90) # 0 is at 12 o'clock (which is -90 deg)
+        
+        # Distances from center
+        dist_outer = radius - size[0] // 40
+        dist_text = radius - size[0] // 10 # Text needs to be further in
+        
+        if style in ['arabic', 'roman']:
+            text = ARABIC_NUMERALS[i] if style == 'arabic' else ROMAN_NUMERALS[i]
+            
+            # Position for text center
+            tx = cx + dist_text * math.cos(angle)
+            ty = cy + dist_text * math.sin(angle)
+            
+            # Calculate text size to center it
+            left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
+            w, h = right - left, bottom - top
+            draw.text((tx - w/2, ty - h/2), text, fill=color, font=font)
+            
+        elif style == 'line':
+            dist_inner = radius - size[0] // 15
+            sx = cx + dist_inner * math.cos(angle)
+            sy = cy + dist_inner * math.sin(angle)
+            ex = cx + dist_outer * math.cos(angle)
+            ey = cy + dist_outer * math.sin(angle)
+            width = int(size[0] // 50) if i % 3 == 0 else int(size[0] // 100)
+            draw.line((sx, sy, ex, ey), fill=color, width=width)
+            
+        elif style == 'dot':
+            dist_dot = radius - size[0] // 20
+            dx = cx + dist_dot * math.cos(angle)
+            dy = cy + dist_dot * math.sin(angle)
+            r = size[0] // 50 if i % 3 == 0 else size[0] // 80
+            draw.ellipse((dx-r, dy-r, dx+r, dy+r), fill=color)
+
+# ===================== DIGITAL CLOCK FUNCTIONS =====================
+
+def draw_digital_simple(h, m, s, size):
     img = Image.new('RGB', size, color=(0, 0, 0))
     draw = ImageDraw.Draw(img)
-    
-    # Format time string
     time_str = f"{h:02d}:{m:02d}:{s:02d}"
-    
-    # Try to load a font, fallback to default if not found
-    try:
-        # Using a monospaced font if available usually looks better for digital
-        # On Windows, 'arial.ttf' or 'consola.ttf' are common
-        font = ImageFont.truetype("arial.ttf", size=int(size[0]/5))
-    except IOError:
-        font = ImageFont.load_default()
-
-    # Calculate text position to center it (using getbbox for newer Pillow versions)
+    font = get_font(size[0]/5)
     left, top, right, bottom = draw.textbbox((0, 0), time_str, font=font)
-    text_width = right - left
-    text_height = bottom - top
-    
-    position = ((size[0] - text_width) / 2, (size[1] - text_height) / 2)
-    
-    # Draw text in bright red/orange like a classic LED clock
-    draw.text(position, time_str, fill=(255, 50, 50), font=font)
-    
+    draw.text(((size[0]-(right-left))/2, (size[1]-(bottom-top))/2), time_str, fill=(255, 60, 60), font=font)
     return img
 
-def draw_analog_clock(h, m, s, size=(256, 256)):
-    """Draws an analog clock image."""
-    # White background or light gray
-    bg_color = (240, 240, 240)
-    img = Image.new('RGB', size, color=bg_color)
+def draw_digital_lcd(h, m, s, size):
+    img = Image.new('RGB', size, color=(180, 200, 180))
     draw = ImageDraw.Draw(img)
-    
-    center = (size[0] // 2, size[1] // 2)
-    radius = (min(size) // 2) - 10
-    
-    # Draw clock face (circle)
-    draw.ellipse((center[0] - radius, center[1] - radius, 
-                  center[0] + radius, center[1] + radius), 
-                 outline=(0, 0, 0), width=4, fill=(255, 255, 255))
-    
-    # Draw ticks (optional, makes it look more realistic)
-    for i in range(12):
-        angle = math.radians(i * 30 - 90)
-        start_x = center[0] + (radius - 15) * math.cos(angle)
-        start_y = center[1] + (radius - 15) * math.sin(angle)
-        end_x = center[0] + radius * math.cos(angle)
-        end_y = center[1] + radius * math.sin(angle)
-        draw.line((start_x, start_y, end_x, end_y), fill=(0,0,0), width=3)
+    mgn = size[0]//10
+    draw.rectangle([mgn, size[1]//3, size[0]-mgn, 2*size[1]//3], fill=(200, 220, 200), outline=(100, 120, 100), width=2)
+    time_str = f"{h:02d}:{m:02d}:{s:02d}"
+    font = get_font(size[0]/6)
+    left, top, right, bottom = draw.textbbox((0, 0), time_str, font=font)
+    draw.text(((size[0]-(right-left))/2, (size[1]-(bottom-top))/2), time_str, fill=(40, 60, 40), font=font)
+    return img
 
-    # --- Calculate Angles ---
-    # Seconds: 6 degrees per second
+def draw_digital_segmented(h, m, s, size):
+    img = Image.new('RGB', size, color=(20, 20, 25))
+    draw = ImageDraw.Draw(img)
+    time_str = f"{h:02d}{m:02d}{s:02d}"
+    font = get_font(size[0]/8)
+    seg_w = size[0] // 7
+    start_y = (size[1] - size[1]//2.5) // 2
+    for i, char in enumerate(time_str):
+        x = (i + 0.5) * seg_w
+        draw.rectangle([x-seg_w/3, start_y, x+seg_w/3, start_y+size[1]//2.5], fill=(40,40,50))
+        l,t,r,b = draw.textbbox((0,0), char, font=font)
+        draw.text((x-(r-l)/2, start_y+(size[1]//2.5-(b-t))/2), char, fill=(0, 255, 200), font=font)
+    return img
+
+# ===================== ANALOG CLOCK FUNCTIONS =====================
+
+def draw_analog_dynamic(h, m, s, size, palette):
+    """
+    Dynamically generates an analog clock with random hands and random marker styles.
+    """
+    img = Image.new('RGB', size, color=palette['bg'])
+    draw = ImageDraw.Draw(img)
+    center = (size[0] // 2, size[1] // 2)
+    radius = min(size) // 2 - max(5, size[0] // 25)
+    
+    # 1. Draw Face
+    draw.ellipse((center[0]-radius, center[1]-radius, center[0]+radius, center[1]+radius),
+                 outline=palette['hands'], width=max(2, size[0]//128), fill=palette['face'])
+    
+    # 2. Randomize Marker Style
+    marker_style = random.choice(['line', 'dot', 'arabic', 'roman'])
+    marker_font = get_font(size[0] / 8) if marker_style in ['arabic', 'roman'] else None
+    
+    draw_markers(draw, center, radius, marker_style, palette['markers'], size, marker_font)
+
+    # 3. Randomize Hand Style
+    # We can mix styles (e.g., hour/min are tapered, second is line) or keep uniform
+    hand_style = random.choice(['line', 'tapered', 'arrow', 'diamond'])
+    
+    # Calculate Angles
     sec_angle = math.radians(s * 6 - 90)
+    min_angle = math.radians(m * 6 + s * 0.1 - 90)
+    hour_angle = math.radians((h % 12) * 30 + m * 0.5 - 90)
     
-    # Minutes: 6 degrees per minute + adjustment for seconds
-    min_angle = math.radians(m * 6 + (s * 0.1) - 90)
+    # Draw Hands (Hour, Minute, Second)
+    # Hour
+    draw_hand_fancy(draw, center, hour_angle, radius * 0.5, size[0] * 0.04, palette['hands'], hand_style)
+    # Minute
+    draw_hand_fancy(draw, center, min_angle, radius * 0.75, size[0] * 0.03, palette['hands'], hand_style)
+    # Second (usually thinner and often red/accent, usually 'line' or 'tapered' looks best)
+    sec_style = 'line' if hand_style == 'arrow' else hand_style 
+    draw_hand_fancy(draw, center, sec_angle, radius * 0.85, size[0] * 0.01, palette['accent'], sec_style)
     
-    # Hours: 30 degrees per hour + adjustment for minutes
-    hour_angle = math.radians((h % 12) * 30 + (m * 0.5) - 90)
-    
-    # --- Draw Hands ---
-    
-    # Hour Hand (Short, Thick)
-    hour_len = radius * 0.5
-    draw.line((center[0], center[1], 
-               center[0] + hour_len * math.cos(hour_angle), 
-               center[1] + hour_len * math.sin(hour_angle)), 
-              fill=(0, 0, 0), width=8)
-              
-    # Minute Hand (Long, Medium)
-    min_len = radius * 0.75
-    draw.line((center[0], center[1], 
-               center[0] + min_len * math.cos(min_angle), 
-               center[1] + min_len * math.sin(min_angle)), 
-              fill=(0, 0, 0), width=5)
-              
-    # Second Hand (Long, Thin, Red)
-    sec_len = radius * 0.85
-    draw.line((center[0], center[1], 
-               center[0] + sec_len * math.cos(sec_angle), 
-               center[1] + sec_len * math.sin(sec_angle)), 
-              fill=(255, 0, 0), width=2)
-              
     # Center Cap
-    draw.ellipse((center[0]-5, center[1]-5, center[0]+5, center[1]+5), fill=(0,0,0))
+    cap_r = size[0] // 30
+    draw.ellipse((center[0]-cap_r, center[1]-cap_r, center[0]+cap_r, center[1]+cap_r), fill=palette['hands'])
     
     return img
 
-def generate_dataset(count, output_dir):
-    """Generates 'count' pairs of images in 'output_dir'."""
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-        
-    print(f"Generating {count} image pairs in {output_dir}...")
+def draw_analog_square(h, m, s, size, palette):
+    """Square face variant (keeps simple lines for markers to fit corners better)"""
+    img = Image.new('RGB', size, color=palette['bg'])
+    draw = ImageDraw.Draw(img)
+    margin = size[0] // 10
+    face_rect = [margin, margin, size[0]-margin, size[1]-margin]
+    
+    draw.rectangle(face_rect, fill=palette['face'], outline=palette['hands'], width=3)
+    
+    # Randomize numbers vs lines
+    center = (size[0]//2, size[1]//2)
+    radius = (size[0]//2) - margin - 10
+    marker_style = random.choice(['line', 'arabic'])
+    font = get_font(size[0]/9)
+    draw_markers(draw, center, radius, marker_style, palette['markers'], size, font)
+
+    # Hands
+    sec_angle = math.radians(s * 6 - 90)
+    min_angle = math.radians(m * 6 + s * 0.1 - 90)
+    hour_angle = math.radians((h % 12) * 30 + m * 0.5 - 90)
+    
+    draw_hand_fancy(draw, center, hour_angle, radius*0.5, size[0]*0.04, palette['hands'], 'line')
+    draw_hand_fancy(draw, center, min_angle, radius*0.75, size[0]*0.03, palette['hands'], 'line')
+    draw_hand_fancy(draw, center, sec_angle, radius*0.85, size[0]*0.01, palette['accent'], 'line')
+    
+    return img
+
+# ===================== DATASET GENERATION LOGIC =====================
+
+DIGITAL_STYLES = [('simple', draw_digital_simple), ('lcd', draw_digital_lcd), ('segmented', draw_digital_segmented)]
+# Note: 'dynamic' covers classic, modern, and fancy combinations
+ANALOG_STYLES = [('dynamic', draw_analog_dynamic), ('square', draw_analog_square)]
+
+class DatasetManager:
+    def __init__(self, train_max_unique=400):
+        self.train_max_unique = train_max_unique
+        self.train_times: List[Tuple[int, int, int]] = []
+        self.test_times_used: Set[Tuple[int, int, int]] = set()
+
+    def get_train_times(self):
+        if self.train_times: return self.train_times
+        pool = set()
+        while len(pool) < self.train_max_unique:
+            pool.add((random.randint(0, 23), random.randint(0, 59), random.randint(0, 59)))
+        self.train_times = list(pool)
+        return self.train_times
+
+    def get_test_time(self):
+        train_pool = set(self.get_train_times())
+        while True:
+            t = (random.randint(0, 23), random.randint(0, 59), random.randint(0, 59))
+            if t not in train_pool: return t
+
+def generate_subset(manager, subset_name, count, root_dir, size):
+    print(f"Generating {subset_name} set ({count} images)...")
+    base_dir = os.path.join(root_dir, subset_name)
+    dig_dir = os.path.join(base_dir, 'digital')
+    ana_dir = os.path.join(base_dir, 'analog')
+    os.makedirs(dig_dir, exist_ok=True)
+    os.makedirs(ana_dir, exist_ok=True)
+    
+    csv_file = open(os.path.join(base_dir, 'labels.csv'), 'w', newline='')
+    writer = csv.writer(csv_file)
+    writer.writerow(['digital_filename', 'analog_filename', 'hour', 'minute', 'second'])
+    
+    train_pool = manager.get_train_times()
     
     for i in range(count):
-        h, m, s = get_random_time()
+        h, m, s = random.choice(train_pool) if subset_name == 'train' else manager.get_test_time()
         
-        # Draw images
-        dig_img = draw_digital_clock(h, m, s)
-        ana_img = draw_analog_clock(h, m, s)
+        # Select Styles
+        dig_name, dig_func = random.choice(DIGITAL_STYLES)
+        ana_name, ana_func = random.choice(ANALOG_STYLES)
+        pal_name = random.choice(list(COLOR_PALETTES.keys()))
         
-        # Save images
-        # Filename format: clock_{index}_{H}_{M}_{S}_{type}.png
-        base_name = f"clock_{i}_{h:02d}_{m:02d}_{s:02d}"
+        # Render
+        dig_img = dig_func(h, m, s, size)
+        ana_img = ana_func(h, m, s, size, COLOR_PALETTES[pal_name])
         
-        dig_img.save(os.path.join(output_dir, f"{base_name}_digital.png"))
-        ana_img.save(os.path.join(output_dir, f"{base_name}_analog.png"))
+        # Save
+        base = f"clock_{i:05d}_{h:02d}_{m:02d}_{s:02d}"
+        d_fn = f"{base}_dig_{dig_name}.png"
+        a_fn = f"{base}_ana_{ana_name}_{pal_name}.png"
         
-    print("Done.")
+        dig_img.save(os.path.join(dig_dir, d_fn))
+        ana_img.save(os.path.join(ana_dir, a_fn))
+        writer.writerow([d_fn, a_fn, h, m, s])
+        
+        if (i+1) % 100 == 0: print(f"  {subset_name}: {i+1}/{count}")
 
-if __name__ == "__main__":
+    csv_file.close()
+
+def main():
     import argparse
-    
-    parser = argparse.ArgumentParser(description="Generate synthetic clock dataset.")
-    parser.add_argument("--count", type=int, default=10, help="Number of image pairs to generate.")
-    parser.add_argument("--output_dir", type=str, default=os.path.join("data", "train"), help="Directory to save images.")
-    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output_dir", type=str, required=True)
+    parser.add_argument("--train_count", type=int, default=1000)
+    parser.add_argument("--test_count", type=int, default=200)
+    parser.add_argument("--image_size", type=int, default=256)
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     
-    generate_dataset(args.count, args.output_dir)
+    random.seed(args.seed)
+    manager = DatasetManager(train_max_unique=400)
+    
+    generate_subset(manager, 'train', args.train_count, args.output_dir, (args.image_size, args.image_size))
+    generate_subset(manager, 'test', args.test_count, args.output_dir, (args.image_size, args.image_size))
+
+if __name__ == "__main__":
+    main()
