@@ -310,7 +310,8 @@ def generate_subset(manager, subset_name, count, root_dir, size):
         ana_img = ana_func(h, m, s, size, COLOR_PALETTES[pal_name])
         
         # Save
-        base = f"clock_{i:05d}_{h:02d}_{m:02d}_{s:02d}"
+        base = f"{h:02d}_{m:02d}_{s:02d}_{i:05d}"
+        
         d_fn = f"{base}_dig_{dig_name}.png"
         a_fn = f"{base}_ana_{ana_name}_{pal_name}.png"
         
