@@ -1,78 +1,64 @@
 import os
 import pandas as pd
 import torch
-from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
+from torch.utils.data import Dataset
 from PIL import Image
 
 class ClockDataset(Dataset):
-    def __init__(self, root_dir, subset='train', transform=None):
-        """
-        Custom Dataset for loading clock images and their corresponding time labels.
-        Args:
-            root_dir (string): Directory with all the images (e.g., './data').
-            subset (string): 'train' or 'test'.
-            transform (callable, optional): Optional transform to be applied on a sample.
-        """
+    def __init__(self, root_dir, subset="train", transform=None):
         self.root_dir = os.path.join(root_dir, subset)
-        self.labels_frame = pd.read_csv(os.path.join(self.root_dir, 'labels.csv'))
+        self.labels_path = os.path.join(self.root_dir, "labels.csv")
+        
+        if not os.path.exists(self.labels_path):
+            raise FileNotFoundError(f"labels.csv not found at: {self.labels_path}")
+
+        self.df = pd.read_csv(self.labels_path)
         self.transform = transform
 
     def __len__(self):
-        return len(self.labels_frame)
+        return len(self.df)
 
     def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.tolist()
+        row = self.df.iloc[idx]
+        
+        # 1. Load Paths
+        d_fn = str(row["digital_filename"])
+        a_fn = str(row["analog_filename"])
+        # Clean filename is optional, if not present we can use the analog image as a placeholder for the clean image
+        c_fn = str(row["analog_clean_filename"]) if "analog_clean_filename" in row else None
 
-        # Fetching filenames from the CSV
-        dig_filename = self.labels_frame.iloc[idx, 0]
-        ana_filename = self.labels_frame.iloc[idx, 1]
+        dig_path = os.path.join(self.root_dir, "digital", d_fn)
+        ana_path = os.path.join(self.root_dir, "analog", a_fn)
         
-        # Making full paths
-        dig_path = os.path.join(self.root_dir, 'digital', dig_filename)
-        ana_path = os.path.join(self.root_dir, 'analog', ana_filename)
+        # 2. Open Images
+        digital_img = Image.open(dig_path).convert("RGB") 
+        analog_img = Image.open(ana_path).convert("RGB")
         
-        # Loading images and converting to RGB format for PyTorch compatibility
-        image_digital = Image.open(dig_path).convert('RGB')
-        image_analog = Image.open(ana_path).convert('RGB')
-        
-        # Loading labels (h, m, s)
-        h = self.labels_frame.iloc[idx, 2]
-        m = self.labels_frame.iloc[idx, 3]
-        s = self.labels_frame.iloc[idx, 4]
-        
-        # Creating time tensor and normalizing
-        # Normalization: h in [0,23], m in [0,59], s in [0,59]
-        time_tensor = torch.tensor([h/23.0, m/59.0, s/59.0], dtype=torch.float32)
+        if c_fn:
+            clean_path = os.path.join(self.root_dir, "analog", c_fn)
+            clean_img = Image.open(clean_path).convert("RGB")
+        else:
+            # Fallback if clean image is not available, we can use the analog image as a placeholder
+            clean_img = analog_img.copy()
 
+        # 3. Apply Transforms
         if self.transform:
-            image_digital = self.transform(image_digital)
-            image_analog = self.transform(image_analog)
+            digital_img = self.transform(digital_img)
+            analog_img = self.transform(analog_img)
+            clean_img = self.transform(clean_img)
+
+        # 4. Parse Time Labels
+        h = int(row["hour"])
+        m = int(row["minute"])
+        s = int(row["second"])
+        
+        # Normalized labels for regression (0-1 range)
+        time_label = torch.tensor([h/23.0, m/59.0, s/59.0], dtype=torch.float32)
 
         return {
-            'digital_img': image_digital,
-            'analog_img': image_analog,
-            'time_label': time_tensor, # (h, m, s) normalized
-            'original_time': torch.tensor([h, m, s]) # for debugging
+            "digital_img": digital_img,
+            "analog_img": analog_img,
+            "clean_img": clean_img,  
+            "time_label": time_label,
+            "original_time": torch.tensor([h, m, s], dtype=torch.long)
         }
-
-# Local test to verify the Dataset works as expected
-if __name__ == "__main__":
-    # Setup transformations for the images
-    data_transform = transforms.Compose([
-        transforms.Resize((128, 128)), # Size images to 128x128
-        transforms.ToTensor(),
-    ])
-
-    # Dataset instance
-    train_dataset = ClockDataset(root_dir='./data', subset='train', transform=data_transform)
-    
-    # Make DataLoader for batching and shuffling
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-
-    # Fetch a single batch
-    batch = next(iter(train_loader))
-    print("Batch images shape:", batch['digital_img'].shape) # (32, 3, 128, 128)
-    print("Batch labels shape:", batch['time_label'].shape)  # (32, 3)
-    print("First time in batch:", batch['original_time'][0])

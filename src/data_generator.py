@@ -206,6 +206,8 @@ def draw_analog_dynamic(h, m, s, size, palette):
     
     draw_markers(draw, center, radius, marker_style, palette['markers'], size, marker_font)
 
+    clean_bg = img.copy()
+
     # 3. Randomize Hand Style
     # We can mix styles (e.g., hour/min are tapered, second is line) or keep uniform
     hand_style = random.choice(['line', 'tapered', 'arrow', 'diamond'])
@@ -228,7 +230,7 @@ def draw_analog_dynamic(h, m, s, size, palette):
     cap_r = size[0] // 30
     draw.ellipse((center[0]-cap_r, center[1]-cap_r, center[0]+cap_r, center[1]+cap_r), fill=palette['hands'])
     
-    return img
+    return img, clean_bg
 
 def draw_analog_square(h, m, s, size, palette):
     """Square face variant (keeps simple lines for markers to fit corners better)"""
@@ -246,6 +248,8 @@ def draw_analog_square(h, m, s, size, palette):
     font = get_font(size[0]/9)
     draw_markers(draw, center, radius, marker_style, palette['markers'], size, font)
 
+    clean_bg = img.copy()
+
     # Hands
     sec_angle = math.radians(s * 6 - 90)
     min_angle = math.radians(m * 6 + s * 0.1 - 90)
@@ -255,7 +259,7 @@ def draw_analog_square(h, m, s, size, palette):
     draw_hand_fancy(draw, center, min_angle, radius*0.75, size[0]*0.03, palette['hands'], 'line')
     draw_hand_fancy(draw, center, sec_angle, radius*0.85, size[0]*0.01, palette['accent'], 'line')
     
-    return img
+    return img, clean_bg
 
 # ===================== DATASET GENERATION LOGIC =====================
 
@@ -293,13 +297,13 @@ def generate_subset(manager, subset_name, count, root_dir, size):
     
     csv_file = open(os.path.join(base_dir, 'labels.csv'), 'w', newline='')
     writer = csv.writer(csv_file)
-    writer.writerow(['digital_filename', 'analog_filename', 'hour', 'minute', 'second'])
-    
+    writer.writerow(['digital_filename', 'analog_filename', 'analog_clean_filename', 'hour', 'minute', 'second'])
     train_pool = manager.get_train_times()
     
     for i in range(count):
         h, m, s = random.choice(train_pool) if subset_name == 'train' else manager.get_test_time()
-        
+        base = f"{h:02d}_{m:02d}_{s:02d}_{i:05d}"
+
         # Select Styles
         dig_name, dig_func = random.choice(DIGITAL_STYLES)
         ana_name, ana_func = random.choice(ANALOG_STYLES)
@@ -307,17 +311,19 @@ def generate_subset(manager, subset_name, count, root_dir, size):
         
         # Render
         dig_img = dig_func(h, m, s, size)
-        ana_img = ana_func(h, m, s, size, COLOR_PALETTES[pal_name])
+        ana_img, clean_img = ana_func(h, m, s, size, COLOR_PALETTES[pal_name])
+        clean_fn = f"{base}_ana_clean_{ana_name}_{pal_name}.png"
+        clean_img.save(os.path.join(ana_dir, clean_fn))
         
-        # Save
-        base = f"{h:02d}_{m:02d}_{s:02d}_{i:05d}"
-        
+        # Save        
         d_fn = f"{base}_dig_{dig_name}.png"
         a_fn = f"{base}_ana_{ana_name}_{pal_name}.png"
+        clean_fn = f"{base}_ana_clean_{ana_name}_{pal_name}.png"
         
         dig_img.save(os.path.join(dig_dir, d_fn))
         ana_img.save(os.path.join(ana_dir, a_fn))
-        writer.writerow([d_fn, a_fn, h, m, s])
+        clean_img.save(os.path.join(ana_dir, clean_fn))
+        writer.writerow([d_fn, a_fn, clean_fn, h, m, s])
         
         if (i+1) % 100 == 0: print(f"  {subset_name}: {i+1}/{count}")
 
