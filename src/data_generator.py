@@ -26,10 +26,33 @@ COLOR_PALETTES = {
 # ===================== HELPER FUNCTIONS =====================
 
 def get_font(size_px, font_name="arial.ttf"):
-    try:
-        return ImageFont.truetype(font_name, size=int(size_px))
-    except IOError:
-        return ImageFont.load_default()
+    import sys
+    size_px = int(size_px)
+    
+    # List of fonts to try in order
+    candidates = [
+        font_name,
+        "Arial.ttf",
+        "DejaVuSans.ttf",
+        "DejaVuSans-Bold.ttf", 
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",      # macOS
+        "/System/Library/Fonts/Arial.ttf",          # macOS
+        "C:/Windows/Fonts/arial.ttf",               # Windows
+        "C:/Windows/Fonts/cour.ttf",                # Windows fallback
+    ]
+    
+    for candidate in candidates:
+        try:
+            font = ImageFont.truetype(candidate, size=size_px)
+            return font
+        except (IOError, OSError):
+            continue
+    
+    # If nothing works, print a warning so you know
+    print(f"WARNING: No truetype font found! Text will be tiny. Install fonts or add path.")
+    return ImageFont.load_default()
 
 def rotate_point(point, center, angle_rad):
     """Rotates a point (x, y) around center (cx, cy) by angle_rad."""
@@ -151,38 +174,115 @@ def draw_markers(draw, center, radius, style, color, size, font=None):
 
 # ===================== DIGITAL CLOCK FUNCTIONS =====================
 
+def get_fitted_font(draw, text, max_width, max_height, start_size, font_name="arial.ttf", min_size=10):
+    size = int(start_size)
+
+    while size >= min_size:
+        font = get_font(size, font_name)
+        left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
+        w, h = right - left, bottom - top
+
+        if w <= max_width and h <= max_height:
+            return font
+
+        size -= 2
+
+    return get_font(min_size, font_name)
+
 def draw_digital_simple(h, m, s, size):
-    img = Image.new('RGB', size, color=(0, 0, 0))
+    img = Image.new('RGB', size, color=(15, 15, 20))
     draw = ImageDraw.Draw(img)
     time_str = f"{h:02d}:{m:02d}:{s:02d}"
-    font = get_font(size[0]/5)
+
+    max_width = int(size[0] * 0.85)
+    max_height = int(size[1] * 0.30)
+
+    font = get_fitted_font(
+        draw,
+        time_str,
+        max_width=max_width,
+        max_height=max_height,
+        start_size=int(size[0] * 0.25)
+    )
+
     left, top, right, bottom = draw.textbbox((0, 0), time_str, font=font)
-    draw.text(((size[0]-(right-left))/2, (size[1]-(bottom-top))/2), time_str, fill=(255, 60, 60), font=font)
+    w, h_txt = right - left, bottom - top
+    x = (size[0] - w) / 2
+    y = (size[1] - h_txt) / 2
+
+    draw.text((x, y), time_str, fill=(220, 60, 60), font=font)
     return img
+
+
+def draw_digital_segmented(h, m, s, size):
+    img = Image.new('RGB', size, color=(15, 15, 20))
+    draw = ImageDraw.Draw(img)
+
+    time_str = f"{h:02d}:{m:02d}:{s:02d}"
+
+    mgn = size[0] // 10
+    panel = [mgn, size[1] // 3, size[0] - mgn, 2 * size[1] // 3]
+
+    draw.rectangle(
+        panel,
+        fill=(25, 35, 25),
+        outline=(0, 140, 90),
+        width=2
+    )
+
+    panel_width = panel[2] - panel[0] - 12
+    panel_height = panel[3] - panel[1] - 12
+
+    font = get_fitted_font(
+        draw,
+        time_str,
+        max_width=panel_width,
+        max_height=panel_height,
+        start_size=int(size[0] * 0.22)
+    )
+
+    left, top, right, bottom = draw.textbbox((0, 0), time_str, font=font)
+    w, h_txt = right - left, bottom - top
+    x = (size[0] - w) / 2
+    y = (size[1] - h_txt) / 2
+
+    draw.text((x, y), time_str, fill=(0, 230, 150), font=font)
+    return img
+
 
 def draw_digital_lcd(h, m, s, size):
     img = Image.new('RGB', size, color=(180, 200, 180))
     draw = ImageDraw.Draw(img)
-    mgn = size[0]//10
-    draw.rectangle([mgn, size[1]//3, size[0]-mgn, 2*size[1]//3], fill=(200, 220, 200), outline=(100, 120, 100), width=2)
-    time_str = f"{h:02d}:{m:02d}:{s:02d}"
-    font = get_font(size[0]/6)
-    left, top, right, bottom = draw.textbbox((0, 0), time_str, font=font)
-    draw.text(((size[0]-(right-left))/2, (size[1]-(bottom-top))/2), time_str, fill=(40, 60, 40), font=font)
-    return img
 
-def draw_digital_segmented(h, m, s, size):
-    img = Image.new('RGB', size, color=(20, 20, 25))
-    draw = ImageDraw.Draw(img)
-    time_str = f"{h:02d}{m:02d}{s:02d}"
-    font = get_font(size[0]/8)
-    seg_w = size[0] // 7
-    start_y = (size[1] - size[1]//2.5) // 2
-    for i, char in enumerate(time_str):
-        x = (i + 0.5) * seg_w
-        draw.rectangle([x-seg_w/3, start_y, x+seg_w/3, start_y+size[1]//2.5], fill=(40,40,50))
-        l,t,r,b = draw.textbbox((0,0), char, font=font)
-        draw.text((x-(r-l)/2, start_y+(size[1]//2.5-(b-t))/2), char, fill=(0, 255, 200), font=font)
+    time_str = f"{h:02d}:{m:02d}:{s:02d}"
+
+    mgn = size[0] // 10
+    panel = [mgn, size[1] // 3, size[0] - mgn, 2 * size[1] // 3]
+
+    draw.rectangle(
+        panel,
+        fill=(200, 220, 200),
+        outline=(100, 120, 100),
+        width=2
+    )
+
+    panel_width = panel[2] - panel[0] - 12
+    panel_height = panel[3] - panel[1] - 12
+
+    font = get_fitted_font(
+        draw,
+        time_str,
+        max_width=panel_width,
+        max_height=panel_height,
+        start_size=int(size[0] * 0.22)
+    )
+
+    left, top, right, bottom = draw.textbbox((0, 0), time_str, font=font)
+    w, h_txt = right - left, bottom - top
+    x = (size[0] - w) / 2
+    y = (size[1] - h_txt) / 2
+
+    draw.text((x, y), time_str, fill=(40, 60, 40), font=font)
     return img
 
 # ===================== ANALOG CLOCK FUNCTIONS =====================
