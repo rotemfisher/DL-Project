@@ -37,7 +37,7 @@ _reader_transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225]),
 ])
 
-os.mkdir('results', exist_ok=True)
+os.makedirs('results', exist_ok=True)
 
 class ClockPipeline:
     """
