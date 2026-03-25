@@ -1,12 +1,17 @@
 import os
 import sys
+import math
+import argparse
 import time
 from datetime import datetime
  
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
 import matplotlib.pyplot as plt
-from PIL import Image
-from torchvision import transforms
+from PIL import Image, ImageDraw
+from torchvision import transforms, models
 from torch.utils.data import DataLoader
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,7 +19,6 @@ from src.dataset import ClockDataset
 from pipeline.analog_reader import DigitalClockClassifier
 from pipeline.draw_hand import draw_hands_on_tensor
 from pipeline.hand_eraser import ClockEraserV2
-from pipeline.geometry import ClockGeometryNet
 
 device = torch.device(
     'cuda' if torch.cuda.is_available()
@@ -33,11 +37,6 @@ _reader_transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225]),
 ])
 
-_geom_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-])
-
 os.makedirs('results', exist_ok=True)
 
 class ClockPipeline:
@@ -52,8 +51,7 @@ class ClockPipeline:
  
     def __init__(self,
                  reader_ckpt='src/checkpoints/digital_reader_best.pth',
-                 eraser_ckpt='src/checkpoints/eraser_v2_best.pth',
-                 geom_ckpt='src/checkpoints/geometry_best.pth'): 
+                 eraser_ckpt='src/checkpoints/eraser_v2_best.pth'):
         print(f"Loading pipeline on {device} ...")
         self.reader = DigitalClockClassifier().to(device)
         self.reader.load_state_dict(torch.load(reader_ckpt, map_location=device))
@@ -64,12 +62,6 @@ class ClockPipeline:
         self.eraser.load_state_dict(torch.load(eraser_ckpt, map_location=device))
         self.eraser.eval()
         print("  [OK] Eraser  —", eraser_ckpt)
-
-        self.geom = ClockGeometryNet().to(device)
-        self.geom.load_state_dict(torch.load(geom_ckpt, map_location=device))
-        self.geom.eval()
-        print("  [OK] Geometry —", geom_ckpt)
-
         print("Pipeline ready.\n")
  
     @torch.no_grad()
@@ -100,17 +92,10 @@ class ClockPipeline:
             analog_pil.convert('RGB')).unsqueeze(0).to(device)
         clean_t = self.eraser(ana_t)
  
-        # Stage 3 — Find Geometry
-        geom_t = _geom_transform(
-            analog_pil.convert('RGB')).unsqueeze(0).to(device)
-        geom_preds = self.geom(geom_t)
-
-        # Stage 4 — draw correct hands using geometry
+        # Stage 3 — draw correct hands using geometry
         out_t = draw_hands_on_tensor(
             clean_t.cpu(),
-            h_p.cpu(), m_p.cpu(), s_p.cpu(),
-            geom_preds.cpu() 
-        )
+            h_p.cpu(), m_p.cpu(), s_p.cpu())
  
         # Resize to original analog dimensions
         out_np  = out_t[0].permute(1,2,0).clamp(0,1).numpy()
@@ -144,10 +129,8 @@ def run_single(digital_path, analog_path, output_path=f'results/output_{datetime
 def run_batch(data_dir='src/clock_dataset', n=6,
             output_path=f'results/batch_results_{datetime.now()}.png',
             reader_ckpt='src/checkpoints/digital_reader_best.pth',
-            eraser_ckpt='src/checkpoints/eraser_v2_best.pth',
-            geom_ckpt='src/checkpoints/geometry_best.pth'): 
-    
-    pipe = ClockPipeline(reader_ckpt, eraser_ckpt, geom_ckpt) 
+            eraser_ckpt='src/checkpoints/eraser_v2_best.pth'):
+    pipe = ClockPipeline(reader_ckpt, eraser_ckpt)
  
     ds     = ClockDataset(data_dir, subset='test',
                           transform=_eraser_transform)
@@ -159,25 +142,15 @@ def run_batch(data_dir='src/clock_dataset', n=6,
         for i in range(n)
     ]).to(device)
  
-    geom_for_model = torch.stack([
-        _geom_transform(transforms.ToPILImage()(batch['analog_img'][i]))
-        for i in range(n)
-    ]).to(device)
-
     analog_imgs = batch['analog_img'].to(device)
     true_times  = batch['original_time']
  
     with torch.no_grad():
         h_pred, m_pred, s_pred = pipe.reader.predict_time(dig_for_reader)
         clean_faces = pipe.eraser(analog_imgs)
-        
-        geom_preds = pipe.geom(geom_for_model)
-        
-        outputs = draw_hands_on_tensor(
+        outputs     = draw_hands_on_tensor(
             clean_faces.cpu(),
-            h_pred.cpu(), m_pred.cpu(), s_pred.cpu(),
-            geom_preds.cpu() 
-        )
+            h_pred.cpu(), m_pred.cpu(), s_pred.cpu())
  
     fig, axes = plt.subplots(4, n, figsize=(3*n, 13))
     row_labels = ['Digital input', 'Analog input', 'Our output', 'Ground truth']
@@ -209,22 +182,20 @@ def run_batch(data_dir='src/clock_dataset', n=6,
 
 def run_animate(analog_path,
                 reader_ckpt='src/checkpoints/digital_reader_best.pth',
-                eraser_ckpt='src/checkpoints/eraser_v2_best.pth',
-                geom_ckpt='src/checkpoints/geometry_best.pth'): 
+                eraser_ckpt='src/checkpoints/eraser_v2_best.pth'):
     """
     BONUS: show the provided analog clock displaying the current real time,
     with the second hand moving every second. Press Ctrl+C to stop.
     """
     print("Starting live animation — press Ctrl+C to stop.")
-    pipe = ClockPipeline(reader_ckpt, eraser_ckpt, geom_ckpt) 
+    pipe = ClockPipeline(reader_ckpt, eraser_ckpt)
  
     analog_pil = Image.open(analog_path).convert('RGB')
     ana_t = _eraser_transform(analog_pil).unsqueeze(0).to(device)
-    geom_t = _geom_transform(analog_pil).unsqueeze(0).to(device)
  
+    # Erase once — face never changes
     with torch.no_grad():
         clean_t = pipe.eraser(ana_t)
-        geom_preds = pipe.geom(geom_t) 
  
     plt.ion()
     fig, ax = plt.subplots(figsize=(5, 5))
@@ -240,9 +211,7 @@ def run_animate(analog_path,
  
             frame_t = draw_hands_on_tensor(
                 clean_t.cpu(), 
-                torch.tensor([h]), torch.tensor([m]), torch.tensor([s]),
-                geom_preds.cpu() 
-            )
+                torch.tensor([h]), torch.tensor([m]), torch.tensor([s]))
             frame_np  = frame_t[0].permute(1,2,0).clamp(0,1).numpy()
             frame_pil = Image.fromarray(
                 (frame_np*255).astype('uint8')
@@ -276,6 +245,5 @@ if __name__ == "__main__":
         n=6,                           # Number of images to process and visualize
         output_path='results/test_batch_results.png',
         reader_ckpt='src/checkpoints/digital_reader_best.pth',
-        eraser_ckpt='src/checkpoints/eraser_v2_best.pth',
-        geom_ckpt='src/checkpoints/geometry_best.pth'
+        eraser_ckpt='src/checkpoints/eraser_v2_best.pth'
     )
