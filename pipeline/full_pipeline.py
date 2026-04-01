@@ -112,10 +112,9 @@ def run_single(digital_path, analog_path, output_path=f'results/output_{datetime
     result = pipe.run(digital_pil, analog_pil)
     result.save(output_path)
  
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    fig, axes = plt.subplots(1, 2, figsize=(8, 4))
     axes[0].imshow(digital_pil); axes[0].set_title('Digital input')
-    axes[1].imshow(analog_pil);  axes[1].set_title('Analog input')
-    axes[2].imshow(result);      axes[2].set_title('Output')
+    axes[1].imshow(result);      axes[1].set_title('Output')
     for ax in axes: ax.axis('off')
     plt.suptitle('Clock Conversion Pipeline', fontsize=13)
     plt.tight_layout()
@@ -152,25 +151,23 @@ def run_batch(data_dir='src/clock_dataset', n=6,
             clean_faces.cpu(),
             h_pred.cpu(), m_pred.cpu(), s_pred.cpu())
  
-    fig, axes = plt.subplots(4, n, figsize=(3*n, 13))
-    row_labels = ['Digital input', 'Analog input', 'Our output', 'Ground truth']
- 
+    fig, axes = plt.subplots(3, n, figsize=(3*n, 10))
+    row_labels = ['Digital input', 'Our output', 'Ground truth']
+
     for i in range(n):
         h_t = int(true_times[i][0]); m_t = int(true_times[i][1]); s_t = int(true_times[i][2])
         h_p = int(h_pred[i].item()); m_p = int(m_pred[i].item()); s_p = int(s_pred[i].item())
         correct = (h_t==h_p and m_t==m_p and s_t==s_p)
- 
+
         axes[0,i].imshow(batch['digital_img'][i].permute(1,2,0))
         axes[0,i].set_title(f"read: {h_p:02d}:{m_p:02d}:{s_p:02d}",
                              color='green' if correct else 'red', fontsize=8)
-        axes[1,i].imshow(analog_imgs[i].cpu().permute(1,2,0))
-        axes[1,i].set_title(f"true: {h_t:02d}:{m_t:02d}:{s_t:02d}", fontsize=8)
-        axes[2,i].imshow(outputs[i].permute(1,2,0).clamp(0,1))
-        axes[2,i].set_title('output', fontsize=8)
-        axes[3,i].imshow(batch['analog_img'][i].permute(1,2,0))
-        axes[3,i].set_title('ground truth', fontsize=8)
- 
-        for r in range(4):
+        axes[1,i].imshow(outputs[i].permute(1,2,0).clamp(0,1))
+        axes[1,i].set_title('output', fontsize=8)
+        axes[2,i].imshow(batch['analog_img'][i].permute(1,2,0))
+        axes[2,i].set_title('ground truth', fontsize=8)
+
+        for r in range(3):
             if i == 0: axes[r,0].set_ylabel(row_labels[r], fontsize=9)
             axes[r,i].axis('off')
  
